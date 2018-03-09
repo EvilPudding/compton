@@ -1,4 +1,4 @@
-# Compton
+# Fake Background Cached Blur Compton
 
 [![Join the chat at https://gitter.im/chjj/compton](https://badges.gitter.im/Join%20Chat.svg)](https://gitter.im/chjj/compton?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
 
@@ -43,6 +43,7 @@ __B__ for build-time
 
 __R__ for runtime
 
+* libSDL2-image (B,R)
 * libx11 (B,R)
 * libxcomposite (B,R)
 * libxdamage (B,R)

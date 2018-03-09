@@ -10,8 +10,8 @@ APPDIR ?= $(PREFIX)/share/applications
 ICODIR ?= $(PREFIX)/share/icons/hicolor/
 
 PACKAGES = x11 xcomposite xfixes xdamage xrender xext xrandr
-LIBS = -lm -lrt
-INCS =
+LIBS = -lm -lrt -lSDL2 -lSDL2_image
+INCS = $(shell sdl2-config --cflags)
 
 OBJS = compton.o
 
@@ -170,6 +170,7 @@ endif
 
 uninstall:
 	@rm -f "$(DESTDIR)$(BINDIR)/compton" "$(DESTDIR)$(BINDIR)/compton-trans"
+	@rm -fr "$(DESTDIR)$(CACHEDIR)"
 	@rm -f $(addprefix "$(DESTDIR)$(MANDIR)"/, compton.1 compton-trans.1)
 	@rm -f "$(DESTDIR)$(APPDIR)/compton.desktop"
 ifneq "$(DOCDIR)" ""

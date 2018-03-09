@@ -10,6 +10,7 @@
 
 #include "compton.h"
 #include <ctype.h>
+#include <SDL_image.h>
 
 // === Global constants ===
 
@@ -803,6 +804,96 @@ recheck_focus(session_t *ps) {
   return NULL;
 }
 
+void create_blur(session_t *ps, Pixmap *pixmap) {
+
+  char *home;
+  if (!((home = getenv("HOME")) && strlen(home)))
+  {
+    printf("Cannot find home where cache is supposed to be.\n");
+    exit(1);
+  }
+  char *path = mstrjoin(home, "/compton/blurred.png");
+
+  XImage *ri = XGetImage(ps->dpy, *pixmap, 0, 0, ps->root_width, ps->root_height, AllPlanes, XYPixmap);
+
+  SDL_Surface *tmp = SDL_CreateRGBSurface(SDL_SWSURFACE, ps->root_width * 0.2,
+      ps->root_height * 0.2, 32, ri->red_mask, ri->green_mask, ri->blue_mask, 0);
+  SDL_LockSurface(tmp);
+  int x, y;
+  for (y = 0; y < ps->root_height * 0.2; y++) {
+    int Y = y / 0.2;
+    for (x = 0; x < ps->root_width * 0.2; x++) {
+      int X = x / 0.2;
+      ((unsigned *)tmp->pixels)[x + y * (int)(ps->root_width * 0.2)] = XGetPixel(ri, X, Y);
+    } 
+  }
+  SDL_UnlockSurface(tmp);
+
+  system("mkdir -p \"$HOME/compton\"");
+
+  IMG_SavePNG(tmp, path);
+  SDL_FreeSurface(tmp);
+  ps->root_changed = false;
+
+  free(path);
+  int status = system(
+    "convert \"$HOME/compton/blurred.png\" -blur 18,8 \"$HOME/compton/blurred.png\" &&"
+    "convert -resize 500%  \"$HOME/compton/blurred.png\" \"$HOME/compton/blurred.png\""
+  );
+  if(status)
+  {
+    printf("Could not blur background, do you have imagemagick installed?\n");
+    exit(1);
+  }
+}
+
+Pixmap open_cache_file(session_t *ps, Pixmap *pixmap) {
+  char *home;
+  if (!((home = getenv("HOME")) && strlen(home)))
+  {
+    printf("Cannot find home where cache is supposed to be.\n");
+    exit(1);
+  }
+  char *path = mstrjoin(home, "/compton/blurred.png");
+
+  SDL_Surface *li = IMG_Load(path);
+  if(!li)
+  {
+    create_blur(ps, pixmap);
+    li = IMG_Load(path);
+  }
+  SDL_LockSurface(li);
+  int i;
+  int l = li->w * li->h;
+  struct{ char r, g, b, a; } *pixels = malloc(l * sizeof(*pixels));
+  for(i = 0; i < l; i++)
+  {
+    char *p = &(((uint32_t*)li->pixels)[i]);
+    pixels[i].r = p[2];
+    pixels[i].g = p[1];
+    pixels[i].b = p[0];
+  }
+
+  XImage *image = XCreateImage(ps->dpy, ps->vis, ps->depth,
+      ZPixmap, 0, (char *) pixels, li->w, li->h, 32, li->w * 4);
+  /* free(pixels); */
+  SDL_UnlockSurface(li);
+  if(!image) exit(1);
+
+  Pixmap pixmap_blurred = XCreatePixmap(ps->dpy, ps->root, ps->root_width, ps->root_height, ps->depth);
+  GC gc = XCreateGC(ps->dpy, pixmap_blurred, 0, 0);
+  if (!gc) exit(1);
+
+  XPutImage(ps->dpy, pixmap_blurred, gc, image, 0, 0, 0, 0, ps->root_width, ps->root_height);
+  XFreeGC(ps->dpy, gc);
+  XDestroyImage(image);
+
+  free(path);
+  return pixmap_blurred;
+}
+
+
+
 static bool
 get_root_tile(session_t *ps) {
   /*
@@ -833,21 +924,30 @@ get_root_tile(session_t *ps) {
   // Make sure the pixmap we got is valid
   if (pixmap && !validate_pixmap(ps, pixmap))
     pixmap = None;
-
+  //
   // Create a pixmap if there isn't any
   if (!pixmap) {
     pixmap = XCreatePixmap(ps->dpy, ps->root, 1, 1, ps->depth);
     fill = true;
   }
 
+  if(ps->root_changed)
+  {
+    create_blur(ps, &pixmap);
+  }
+
+  Pixmap pixmap_blurred = open_cache_file(ps, &pixmap);
   // Create Picture
   {
-    XRenderPictureAttributes pa = {
-      .repeat = True,
-    };
+    XRenderPictureAttributes pa = { .repeat = True };
     ps->root_tile_paint.pict = XRenderCreatePicture(
         ps->dpy, pixmap, XRenderFindVisualFormat(ps->dpy, ps->vis),
         CPRepeat, &pa);
+
+    XRenderPictureAttributes pa2 = { .repeat = True };
+    ps->root_tile_paint_blurred.pict = XRenderCreatePicture(
+        ps->dpy, pixmap_blurred, XRenderFindVisualFormat(ps->dpy, ps->vis),
+        CPRepeat, &pa2);
   }
 
   // Fill pixmap if needed
@@ -859,11 +959,20 @@ get_root_tile(session_t *ps) {
     XRenderFillRectangle(ps->dpy, PictOpSrc, ps->root_tile_paint.pict, &c, 0, 0, 1, 1);
   }
 
+
   ps->root_tile_fill = fill;
   ps->root_tile_paint.pixmap = pixmap;
+  ps->root_tile_paint_blurred.pixmap = pixmap_blurred;
+
 #ifdef CONFIG_VSYNC_OPENGL
   if (BKEND_GLX == ps->o.backend)
-    return glx_bind_pixmap(ps, &ps->root_tile_paint.ptex, ps->root_tile_paint.pixmap, 0, 0, 0);
+  {
+    glx_bind_pixmap(ps, &ps->root_tile_paint.ptex,
+        ps->root_tile_paint.pixmap, 0, 0, 0);
+    glx_bind_pixmap(ps, &ps->root_tile_paint_blurred.ptex,
+        ps->root_tile_paint_blurred.pixmap, 0, 0, 0);
+    return true;
+  }
 #endif
 
   return true;
@@ -877,7 +986,8 @@ paint_root(session_t *ps, XserverRegion reg_paint) {
   if (!ps->root_tile_paint.pixmap)
     get_root_tile(ps);
 
-  win_render(ps, NULL, 0, 0, ps->root_width, ps->root_height, 1.0, reg_paint,
+  win_render(ps, NULL, 0, 0, ps->root_width, ps->root_height, 1.0,
+      reg_paint,
       NULL, ps->root_tile_paint.pict);
 }
 
@@ -1379,6 +1489,7 @@ xr_blur_dst(session_t *ps, Picture tgt_buffer,
   Picture src_pict = tgt_buffer, dst_pict = tmp_picture;
   for (int i = 0; blur_kerns[i]; ++i) {
     assert(i < MAX_BLUR_PASS - 1);
+
     XFixed *convolution_blur = blur_kerns[i];
     int kwid = XFixedToDouble(convolution_blur[0]),
         khei = XFixedToDouble(convolution_blur[1]);
@@ -1628,6 +1739,15 @@ win_paint_win(session_t *ps, win *w, XserverRegion reg_paint,
 
   const double dopacity = get_opacity_percent(w);
 
+  if(dopacity > 0)
+  {
+    render(ps, x, y, x, y, wid, hei, 1, false, false,
+        ps->root_tile_paint_blurred.pict,
+        ps->root_tile_paint_blurred.ptex,
+        reg_paint, pcache_reg, &ps->o.glx_prog_win);
+  }
+
+
   if (!w->frame_opacity) {
     win_render(ps, w, 0, 0, wid, hei, dopacity, reg_paint, pcache_reg, pict);
   }
@@ -1682,7 +1802,6 @@ win_paint_win(session_t *ps, win *w, XserverRegion reg_paint,
       }
     }
   }
-
 #undef COMP_BDR
 
   if (pict != w->paint.pict)
@@ -3276,6 +3395,7 @@ root_damaged(session_t *ps) {
   if (ps->root_tile_paint.pixmap) {
     XClearArea(ps->dpy, ps->root, 0, 0, 0, 0, true);
     // if (ps->root_picture != ps->root_tile) {
+    ps->root_changed = true;
       free_root_tile(ps);
     /* }
     if (root_damage) {
@@ -5299,6 +5419,7 @@ parse_rule_opacity(session_t *ps, const char *src) {
 #endif
 }
 
+
 #ifdef CONFIG_LIBCONFIG
 /**
  * Get a file stream of the configuration file to read.
@@ -6959,7 +7080,9 @@ session_init(session_t *ps_old, int argc, char **argv) {
     // .root_damage = None,
     .overlay = None,
     .root_tile_fill = false,
+    .root_changed = false,
     .root_tile_paint = PAINT_INIT,
+    .root_tile_paint_blurred = PAINT_INIT,
     .screen_reg = None,
     .tgt_picture = None,
     .tgt_buffer = PAINT_INIT,

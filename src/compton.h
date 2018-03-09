@@ -309,6 +309,8 @@ static inline void
 free_root_tile(session_t *ps) {
   free_picture(ps, &ps->root_tile_paint.pict);
   free_texture(ps, &ps->root_tile_paint.ptex);
+  free_picture(ps, &ps->root_tile_paint_blurred.pict);
+  free_texture(ps, &ps->root_tile_paint_blurred.ptex);
   if (ps->root_tile_fill)
     free_pixmap(ps, &ps->root_tile_paint.pixmap);
   ps->root_tile_paint.pixmap = None;
@@ -717,7 +719,8 @@ win_render(session_t *ps, win *w, int x, int y, int wid, int hei,
   const bool neg = (w && w->invert_color);
 
   render(ps, x, y, dx, dy, wid, hei, opacity, argb, neg,
-      pict, (w ? w->paint.ptex: ps->root_tile_paint.ptex),
+      pict,
+	  w ? w->paint.ptex: ps->root_tile_paint.ptex,
       reg_paint, pcache_reg, (w ? &ps->o.glx_prog_win: NULL));
 }
 

@@ -827,6 +827,8 @@ typedef struct _session_t {
   /// Whether the root tile is filled by compton.
   bool root_tile_fill;
   /// Picture of the root window background.
+  bool root_changed;
+  paint_t root_tile_paint_blurred;
   paint_t root_tile_paint;
   /// A region of the size of the screen.
   XserverRegion screen_reg;
